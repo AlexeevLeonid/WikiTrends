@@ -1,6 +1,7 @@
 # WikiTrends
 
 WikiTrends — пайплайн обработки live-правок Wikipedia: сбор → обогащение → классификация по темам → аналитика трендов → API/SignalR → UI.
+Стек: .NET + ASP.NET, Kafka, PostgreSQL, Clickhouse, Redis, SignalR, 
 
 ## Состав репозитория
 
