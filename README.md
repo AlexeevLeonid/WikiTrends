@@ -27,7 +27,7 @@ WikiTrends — пайплайн обработки live-правок Wikipedia: 
 docker-compose up -d --build
 ```
 
-Полезные адреса:
+Адреса при развертывании локально:
 - **Seq**: http://localhost:5341
 - **Gateway**: http://localhost:5080
 - **Aggregator** (profile `extended`): http://localhost:5084
