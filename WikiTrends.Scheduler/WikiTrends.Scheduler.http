@@ -1,0 +1,6 @@
+@WikiTrends.Scheduler_HostAddress = http://localhost:5073
+
+GET {{WikiTrends.Scheduler_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

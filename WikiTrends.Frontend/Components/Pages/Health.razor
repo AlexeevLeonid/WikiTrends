@@ -1,0 +1,50 @@
+@page "/health"
+@inject WikiTrends.Frontend.Services.GatewayApiClient Api
+
+<PageTitle>Health</PageTitle>
+
+<h1>Health</h1>
+
+@if (_loading)
+{
+    <p>Loading...</p>
+}
+else if (_error is not null)
+{
+    <p class="text-danger">@_error</p>
+}
+else if (_health is null)
+{
+    <p>No data</p>
+}
+else
+{
+    <dl class="row">
+        <dt class="col-sm-2">Status</dt>
+        <dd class="col-sm-10">@_health.Status</dd>
+        <dt class="col-sm-2">Timestamp</dt>
+        <dd class="col-sm-10">@_health.Timestamp</dd>
+    </dl>
+}
+
+@code {
+    private bool _loading = true;
+    private string? _error;
+    private HealthResponse? _health;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            _health = await Api.GetHealthAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+}

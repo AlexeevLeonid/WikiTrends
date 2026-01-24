@@ -1,0 +1,43 @@
+@page "/topics"
+@using WikiTrends.Contracts.Events
+@inject NavigationManager Nav
+
+<PageTitle>Topic</PageTitle>
+
+<h1>Topic</h1>
+
+<div class="row g-3 align-items-end">
+    <div class="col-md-3">
+        <label class="form-label">TopicId</label>
+        <input class="form-control" type="number" @bind="_topicId" min="1" />
+    </div>
+
+    <div class="col-md-3">
+        <label class="form-label">Period</label>
+        <select class="form-select" @bind="_period">
+            @foreach (var p in Enum.GetValues<TrendPeriod>())
+            {
+                <option value="@p">@p</option>
+            }
+        </select>
+    </div>
+
+    <div class="col-md-3">
+        <button class="btn btn-primary" @onclick="Go">Open</button>
+    </div>
+</div>
+
+@code {
+    private int _topicId = 1;
+    private TrendPeriod _period = TrendPeriod.Last24Hours;
+
+    private void Go()
+    {
+        if (_topicId <= 0)
+        {
+            return;
+        }
+
+        Nav.NavigateTo($"/topics/{_topicId}?period={_period}");
+    }
+}

@@ -1,0 +1,129 @@
+@page "/topics/{TopicId:int}"
+@using Microsoft.AspNetCore.WebUtilities
+@using WikiTrends.Contracts.Api
+@using WikiTrends.Contracts.Events
+@inject NavigationManager Nav
+@inject WikiTrends.Frontend.Services.GatewayApiClient Api
+
+<PageTitle>Topic</PageTitle>
+
+<h1>Topic @TopicId</h1>
+
+<div class="row g-3 align-items-end">
+    <div class="col-md-3">
+        <label class="form-label">Period</label>
+        <select class="form-select" @bind="_period">
+            @foreach (var p in Enum.GetValues<TrendPeriod>())
+            {
+                <option value="@p">@p</option>
+            }
+        </select>
+    </div>
+
+    <div class="col-md-2">
+        <button class="btn btn-primary" @onclick="LoadAsync" disabled="@_loading">Load</button>
+    </div>
+</div>
+
+@if (_loading)
+{
+    <p class="mt-3">Loading...</p>
+}
+else if (_error is not null)
+{
+    <p class="text-danger mt-3">@_error</p>
+}
+else if (_data is null)
+{
+    <p class="mt-3">No data</p>
+}
+else
+{
+    <h3 class="mt-3">@_data.Name</h3>
+
+    <dl class="row">
+        <dt class="col-sm-3">AnomalyScore</dt>
+        <dd class="col-sm-9">@_data.Stats.AnomalyScore</dd>
+
+        <dt class="col-sm-3">Edits last hour</dt>
+        <dd class="col-sm-9">@_data.Stats.EditCountLastHour</dd>
+
+        <dt class="col-sm-3">Edits last 24h</dt>
+        <dd class="col-sm-9">@_data.Stats.EditCountLast24Hours</dd>
+
+        <dt class="col-sm-3">Edits last 7d</dt>
+        <dd class="col-sm-9">@_data.Stats.EditCountLast7Days</dd>
+    </dl>
+
+    <h4>Articles</h4>
+    @if (_data.Articles.Count == 0)
+    {
+        <p>No articles</p>
+    }
+    else
+    {
+        <table class="table table-sm table-striped">
+            <thead>
+            <tr>
+                <th>Title</th>
+                <th>EditCount</th>
+                <th>UniqueEditors</th>
+                <th>LastEditAt</th>
+            </tr>
+            </thead>
+            <tbody>
+            @foreach (var a in _data.Articles)
+            {
+                <tr>
+                    <td>@a.Title</td>
+                    <td>@a.EditCount</td>
+                    <td>@a.UniqueEditors</td>
+                    <td>@a.LastEditAt</td>
+                </tr>
+            }
+            </tbody>
+        </table>
+    }
+}
+
+@code {
+    [Parameter]
+    public int TopicId { get; set; }
+
+    private TopicDetailResponse? _data;
+    private string? _error;
+    private bool _loading;
+
+    private TrendPeriod _period = TrendPeriod.Last24Hours;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        var uri = Nav.ToAbsoluteUri(Nav.Uri);
+        if (QueryHelpers.ParseQuery(uri.Query).TryGetValue("period", out var periodStr) &&
+            Enum.TryParse<TrendPeriod>(periodStr.ToString(), ignoreCase: true, out var parsed))
+        {
+            _period = parsed;
+        }
+
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _error = null;
+
+        try
+        {
+            _data = await Api.GetTopicAsync(TopicId, _period);
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+}

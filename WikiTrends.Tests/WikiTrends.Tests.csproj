@@ -1,0 +1,46 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Remove="NotImplemented\**\*.cs" />
+    <Compile Remove="Workers\StubWorkers\**\*.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="6.0.0" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.8.0" />
+    <PackageReference Include="Microsoft.AspNetCore.TestHost" Version="8.0.0" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" Version="8.0.0" />
+    <PackageReference Include="Moq" Version="4.20.70" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.2" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.2" />
+    <PackageReference Include="Microsoft.Extensions.Options" Version="10.0.2" />
+    <PackageReference Include="xunit" Version="2.5.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.5.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\WikiTrends.Contracts\WikiTrends.Contracts.csproj" />
+    <ProjectReference Include="..\WikiTrends.Infrastructure\WikiTrends.Infrastructure.csproj" />
+    <ProjectReference Include="..\WikiTrends.Collector\WikiTrends.Collector.csproj" />
+    <ProjectReference Include="..\WikiTrends.Enricher\WikiTrends.Enricher.csproj" />
+    <ProjectReference Include="..\WikiTrends.Classifier\WikiTrends.Classifier.csproj" />
+    <ProjectReference Include="..\WikiTrends.Analytics\WikiTrends.Analytics.csproj" />
+    <ProjectReference Include="..\WikiTrends.Aggregator\WikiTrends.Aggregator.csproj" />
+    <ProjectReference Include="..\WikiTrends.Gateway\WikiTrends.Gateway.csproj" />
+    <ProjectReference Include="..\WikiTrends.Scheduler\WikiTrends.Scheduler.csproj" />
+  </ItemGroup>
+
+</Project>

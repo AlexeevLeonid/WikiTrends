@@ -1,0 +1,42 @@
+﻿<div class="top-row ps-3 navbar navbar-dark">
+    <div class="container-fluid">
+        <a class="navbar-brand" href="">WikiTrends.Frontend</a>
+    </div>
+</div>
+
+<input type="checkbox" title="Navigation menu" class="navbar-toggler" />
+
+<div class="nav-scrollable" onclick="document.querySelector('.navbar-toggler').click()">
+    <nav class="nav flex-column">
+        <div class="nav-item px-3">
+            <NavLink class="nav-link" href="" Match="NavLinkMatch.All">
+                <span class="bi bi-house-door-fill-nav-menu" aria-hidden="true"></span> Home
+            </NavLink>
+        </div>
+
+        <div class="nav-item px-3">
+            <NavLink class="nav-link" href="health">
+                <span class="bi bi-plus-square-fill-nav-menu" aria-hidden="true"></span> Health
+            </NavLink>
+        </div>
+
+        <div class="nav-item px-3">
+            <NavLink class="nav-link" href="trends">
+                <span class="bi bi-list-nested-nav-menu" aria-hidden="true"></span> Trends
+            </NavLink>
+        </div>
+
+        <div class="nav-item px-3">
+            <NavLink class="nav-link" href="clusters">
+                <span class="bi bi-list-nested-nav-menu" aria-hidden="true"></span> Clusters
+            </NavLink>
+        </div>
+
+        <div class="nav-item px-3">
+            <NavLink class="nav-link" href="topics">
+                <span class="bi bi-list-nested-nav-menu" aria-hidden="true"></span> Topic
+            </NavLink>
+        </div>
+    </nav>
+</div>
+

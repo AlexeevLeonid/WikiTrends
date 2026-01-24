@@ -1,0 +1,746 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: wikitrends
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: wikitrends-config
+  namespace: wikitrends
+data:
+  ASPNETCORE_ENVIRONMENT: "Production"
+  Serilog__WriteTo__1__Args__serverUrl: "http://wikitrends-seq:5341"
+  Kafka__BootstrapServers: "wikitrends-kafka:9092"
+  Kafka__AutoOffsetReset: "earliest"
+  Kafka__EnableAutoCommit: "false"
+  Kafka__AutoCommitIntervalMs: "5000"
+  Kafka__SessionTimeoutMs: "30000"
+  Kafka__MaxPollIntervalMs: "300000"
+  Topics__RawEdits: "wiki.raw-edits"
+  Topics__EnrichedEdits: "wiki.enriched"
+  Topics__ClassifiedEdits: "wiki.classified"
+  Topics__TrendUpdates: "wiki.trend-updates"
+  Topics__RecalculateBaselineCommands: "wiki.commands.recalculate-baseline"
+  Topics__InvalidateCacheCommands: "wiki.commands.invalidate-cache"
+  ServiceUrls__AggregatorBaseUrl: "http://wikitrends-aggregator"
+  ServiceUrls__AnalyticsBaseUrl: "http://wikitrends-analytics:8080"
+  ServiceUrls__ClassifierBaseUrl: "http://wikitrends-classifier:8080"
+  ServiceUrls__EnricherBaseUrl: "http://wikitrends-enricher:8080"
+  ClickHouse__BaseUrl: "http://wikitrends-clickhouse:8123"
+  ClickHouse__Database: "wikitrends"
+  ClickHouse__ConnectionString: "Host=wikitrends-clickhouse;Protocol=http;Port=8123;Database=wikitrends;Username=wikitrends;Password=wikitrends"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: wikitrends-secrets
+  namespace: wikitrends
+type: Opaque
+stringData:
+  ConnectionStrings__Redis: "wikitrends-redis:6379"
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: wikitrends-postgres
+  namespace: wikitrends
+spec:
+  serviceName: wikitrends-postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: wikitrends-postgres
+  template:
+    metadata:
+      labels:
+        app: wikitrends-postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: POSTGRES_DB
+              value: wikitrends
+            - name: POSTGRES_USER
+              value: postgres
+            - name: POSTGRES_PASSWORD
+              value: postgres
+          ports:
+            - name: pg
+              containerPort: 5432
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+  volumeClaimTemplates:
+    - metadata:
+        name: postgres-data
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 5Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wikitrends-postgres
+  namespace: wikitrends
+spec:
+  selector:
+    app: wikitrends-postgres
+  ports:
+    - name: pg
+      port: 5432
+      targetPort: 5432
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: wikitrends-postgres-init
+  namespace: wikitrends
+spec:
+  backoffLimit: 10
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: postgres-init
+          image: postgres:16
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: PGHOST
+              value: wikitrends-postgres
+            - name: PGUSER
+              value: postgres
+            - name: PGPASSWORD
+              value: postgres
+          command:
+            - bash
+            - -lc
+            - |
+              set -e
+              until pg_isready -h "${PGHOST}" -U "${PGUSER}" -d postgres >/dev/null 2>&1; do echo "Waiting for Postgres..."; sleep 2; done
+              psql -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='wikitrends_enricher'" | grep -q 1 || psql -d postgres -v ON_ERROR_STOP=1 -c "CREATE DATABASE wikitrends_enricher"
+              psql -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='wikitrends_classifier'" | grep -q 1 || psql -d postgres -v ON_ERROR_STOP=1 -c "CREATE DATABASE wikitrends_classifier"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wikitrends-redis
+  namespace: wikitrends
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: wikitrends-redis
+  template:
+    metadata:
+      labels:
+        app: wikitrends-redis
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: redis
+              containerPort: 6379
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wikitrends-redis
+  namespace: wikitrends
+spec:
+  selector:
+    app: wikitrends-redis
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: 6379
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wikitrends-zookeeper
+  namespace: wikitrends
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: wikitrends-zookeeper
+  template:
+    metadata:
+      labels:
+        app: wikitrends-zookeeper
+    spec:
+      containers:
+        - name: zookeeper
+          image: confluentinc/cp-zookeeper:7.6.0
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: ZOOKEEPER_CLIENT_PORT
+              value: "2181"
+            - name: ZOOKEEPER_TICK_TIME
+              value: "2000"
+          ports:
+            - name: zk
+              containerPort: 2181
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wikitrends-zookeeper
+  namespace: wikitrends
+spec:
+  selector:
+    app: wikitrends-zookeeper
+  ports:
+    - name: zk
+      port: 2181
+      targetPort: 2181
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wikitrends-kafka
+  namespace: wikitrends
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: wikitrends-kafka
+  template:
+    metadata:
+      labels:
+        app: wikitrends-kafka
+    spec:
+      containers:
+        - name: kafka
+          image: confluentinc/cp-kafka:7.6.0
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: KAFKA_BROKER_ID
+              value: "1"
+            - name: KAFKA_ZOOKEEPER_CONNECT
+              value: "wikitrends-zookeeper:2181"
+            - name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP
+              value: "PLAINTEXT:PLAINTEXT"
+            - name: KAFKA_LISTENERS
+              value: "PLAINTEXT://0.0.0.0:9092"
+            - name: KAFKA_ADVERTISED_LISTENERS
+              value: "PLAINTEXT://wikitrends-kafka:9092"
+            - name: KAFKA_INTER_BROKER_LISTENER_NAME
+              value: "PLAINTEXT"
+            - name: KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR
+              value: "1"
+            - name: KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS
+              value: "0"
+            - name: KAFKA_AUTO_CREATE_TOPICS_ENABLE
+              value: "false"
+          ports:
+            - name: kafka
+              containerPort: 9092
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wikitrends-kafka
+  namespace: wikitrends
+spec:
+  selector:
+    app: wikitrends-kafka
+  ports:
+    - name: kafka
+      port: 9092
+      targetPort: 9092
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: wikitrends-kafka-init
+  namespace: wikitrends
+spec:
+  backoffLimit: 10
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: kafka-init
+          image: confluentinc/cp-kafka:7.6.0
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: PARTITIONS
+              value: "6"
+          command:
+            - bash
+            - -lc
+            - |
+              set -e
+              until kafka-topics --bootstrap-server wikitrends-kafka:9092 --list >/dev/null 2>&1; do echo "Waiting for Kafka..."; sleep 2; done
+              kafka-topics --bootstrap-server wikitrends-kafka:9092 --create --if-not-exists --topic wiki.raw-edits --replication-factor 1 --partitions ${PARTITIONS}
+              kafka-topics --bootstrap-server wikitrends-kafka:9092 --create --if-not-exists --topic wiki.enriched --replication-factor 1 --partitions ${PARTITIONS}
+              kafka-topics --bootstrap-server wikitrends-kafka:9092 --create --if-not-exists --topic wiki.classified --replication-factor 1 --partitions ${PARTITIONS}
+              kafka-topics --bootstrap-server wikitrends-kafka:9092 --create --if-not-exists --topic wiki.trend-updates --replication-factor 1 --partitions ${PARTITIONS}
+              kafka-topics --bootstrap-server wikitrends-kafka:9092 --create --if-not-exists --topic wiki.commands.recalculate-baseline --replication-factor 1 --partitions ${PARTITIONS}
+              kafka-topics --bootstrap-server wikitrends-kafka:9092 --create --if-not-exists --topic wiki.commands.invalidate-cache --replication-factor 1 --partitions ${PARTITIONS}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wikitrends-seq
+  namespace: wikitrends
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: wikitrends-seq
+  template:
+    metadata:
+      labels:
+        app: wikitrends-seq
+    spec:
+      containers:
+        - name: seq
+          image: datalust/seq:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: ACCEPT_EULA
+              value: "Y"
+            - name: SEQ_FIRSTRUN_NOAUTHENTICATION
+              value: "true"
+          ports:
+            - name: ui
+              containerPort: 80
+            - name: ingestion
+              containerPort: 5341
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wikitrends-seq
+  namespace: wikitrends
+spec:
+  type: NodePort
+  selector:
+    app: wikitrends-seq
+  ports:
+    - name: ui
+      port: 80
+      targetPort: 80
+      nodePort: 30041
+    - name: ingestion
+      port: 5341
+      targetPort: 5341
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: wikitrends-clickhouse
+  namespace: wikitrends
+spec:
+  serviceName: wikitrends-clickhouse
+  replicas: 1
+  selector:
+    matchLabels:
+      app: wikitrends-clickhouse
+  template:
+    metadata:
+      labels:
+        app: wikitrends-clickhouse
+    spec:
+      containers:
+        - name: clickhouse
+          image: clickhouse/clickhouse-server:24.12
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: CLICKHOUSE_DB
+              value: wikitrends
+            - name: CLICKHOUSE_USER
+              value: wikitrends
+            - name: CLICKHOUSE_PASSWORD
+              value: wikitrends
+          ports:
+            - name: http
+              containerPort: 8123
+            - name: native
+              containerPort: 9000
+          volumeMounts:
+            - name: clickhouse-data
+              mountPath: /var/lib/clickhouse
+  volumeClaimTemplates:
+    - metadata:
+        name: clickhouse-data
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 10Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wikitrends-clickhouse
+  namespace: wikitrends
+spec:
+  selector:
+    app: wikitrends-clickhouse
+  ports:
+    - name: http
+      port: 8123
+      targetPort: 8123
+    - name: native
+      port: 9000
+      targetPort: 9000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wikitrends-collector
+  namespace: wikitrends
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: wikitrends-collector
+  template:
+    metadata:
+      labels:
+        app: wikitrends-collector
+    spec:
+      containers:
+        - name: collector
+          image: wikitrends-collector:latest
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: wikitrends-config
+            - secretRef:
+                name: wikitrends-secrets
+          env:
+            - name: Kafka__GroupId
+              value: "wiki-collector-group"
+            - name: ConnectionStrings__PostgreSQL
+              value: "Host=wikitrends-postgres;Database=wikitrends;Username=postgres;Password=postgres"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wikitrends-enricher
+  namespace: wikitrends
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: wikitrends-enricher
+  template:
+    metadata:
+      labels:
+        app: wikitrends-enricher
+    spec:
+      containers:
+        - name: enricher
+          image: wikitrends-enricher:latest
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: wikitrends-config
+            - secretRef:
+                name: wikitrends-secrets
+          env:
+            - name: Kafka__GroupId
+              value: "wiki-enricher-group"
+            - name: ASPNETCORE_URLS
+              value: "http://+:8080"
+            - name: ConnectionStrings__PostgreSQL
+              value: "Host=wikitrends-postgres;Database=wikitrends_enricher;Username=postgres;Password=postgres"
+            - name: Database__MigrateOnStartup
+              value: "true"
+            - name: Enricher__ArticleCacheHours
+              value: "4"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wikitrends-enricher
+  namespace: wikitrends
+spec:
+  selector:
+    app: wikitrends-enricher
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wikitrends-classifier
+  namespace: wikitrends
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: wikitrends-classifier
+  template:
+    metadata:
+      labels:
+        app: wikitrends-classifier
+    spec:
+      containers:
+        - name: classifier
+          image: wikitrends-classifier:latest
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: wikitrends-config
+            - secretRef:
+                name: wikitrends-secrets
+          env:
+            - name: Kafka__GroupId
+              value: "wiki-classifier-group"
+            - name: ASPNETCORE_URLS
+              value: "http://+:8080"
+            - name: ConnectionStrings__PostgreSQL
+              value: "Host=wikitrends-postgres;Database=wikitrends_classifier;Username=postgres;Password=postgres"
+            - name: Database__MigrateOnStartup
+              value: "true"
+            - name: Classifier__WikidataCacheHours
+              value: "24"
+            - name: Classifier__SeedTopicsOnStartup
+              value: "true"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wikitrends-classifier
+  namespace: wikitrends
+spec:
+  selector:
+    app: wikitrends-classifier
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wikitrends-analytics
+  namespace: wikitrends
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: wikitrends-analytics
+  template:
+    metadata:
+      labels:
+        app: wikitrends-analytics
+    spec:
+      containers:
+        - name: analytics
+          image: wikitrends-analytics:latest
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: wikitrends-config
+            - secretRef:
+                name: wikitrends-secrets
+          env:
+            - name: Kafka__GroupId
+              value: "wiki-analytics-group"
+            - name: ASPNETCORE_URLS
+              value: "http://+:8080"
+            - name: ConnectionStrings__PostgreSQL
+              value: "Host=wikitrends-postgres;Database=wikitrends;Username=postgres;Password=postgres"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wikitrends-analytics
+  namespace: wikitrends
+spec:
+  selector:
+    app: wikitrends-analytics
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wikitrends-aggregator
+  namespace: wikitrends
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: wikitrends-aggregator
+  template:
+    metadata:
+      labels:
+        app: wikitrends-aggregator
+    spec:
+      containers:
+        - name: aggregator
+          image: wikitrends-aggregator:latest
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: wikitrends-config
+            - secretRef:
+                name: wikitrends-secrets
+          env:
+            - name: Kafka__GroupId
+              value: "wiki-aggregator-group"
+            - name: ASPNETCORE_URLS
+              value: "http://+:80"
+            - name: ConnectionStrings__PostgreSQL
+              value: "Host=wikitrends-postgres;Database=wikitrends;Username=postgres;Password=postgres"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wikitrends-aggregator
+  namespace: wikitrends
+spec:
+  selector:
+    app: wikitrends-aggregator
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wikitrends-gateway
+  namespace: wikitrends
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: wikitrends-gateway
+  template:
+    metadata:
+      labels:
+        app: wikitrends-gateway
+    spec:
+      containers:
+        - name: gateway
+          image: wikitrends-gateway:latest
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: wikitrends-config
+            - secretRef:
+                name: wikitrends-secrets
+          env:
+            - name: ASPNETCORE_URLS
+              value: "http://+:8080"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wikitrends-gateway
+  namespace: wikitrends
+spec:
+  type: NodePort
+  selector:
+    app: wikitrends-gateway
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      nodePort: 30080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wikitrends-frontend
+  namespace: wikitrends
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: wikitrends-frontend
+  template:
+    metadata:
+      labels:
+        app: wikitrends-frontend
+    spec:
+      containers:
+        - name: frontend
+          image: wikitrends-frontend:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: ASPNETCORE_ENVIRONMENT
+              value: "Production"
+            - name: ASPNETCORE_URLS
+              value: "http://+:8080"
+            - name: Gateway__BaseUrl
+              value: "http://wikitrends-gateway:8080"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wikitrends-frontend
+  namespace: wikitrends
+spec:
+  type: NodePort
+  selector:
+    app: wikitrends-frontend
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      nodePort: 30085
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wikitrends-scheduler
+  namespace: wikitrends
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: wikitrends-scheduler
+  template:
+    metadata:
+      labels:
+        app: wikitrends-scheduler
+    spec:
+      containers:
+        - name: scheduler
+          image: wikitrends-scheduler:latest
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: wikitrends-config
+            - secretRef:
+                name: wikitrends-secrets
+          env:
+            - name: Kafka__GroupId
+              value: "wiki-scheduler-group"
+            - name: ASPNETCORE_URLS
+              value: "http://+:8080"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wikitrends-scheduler
+  namespace: wikitrends
+spec:
+  selector:
+    app: wikitrends-scheduler
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080

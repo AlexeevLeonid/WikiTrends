@@ -1,0 +1,39 @@
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: wikitrends-enricher-scaledobject
+  namespace: wikitrends
+spec:
+  scaleTargetRef:
+    name: wikitrends-enricher
+  pollingInterval: 10
+  cooldownPeriod: 60
+  minReplicaCount: 1
+  maxReplicaCount: 6
+  triggers:
+    - type: kafka
+      metadata:
+        bootstrapServers: wikitrends-kafka:9092
+        consumerGroup: wiki-enricher-group
+        topic: wiki.raw-edits
+        lagThreshold: "200"
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: wikitrends-classifier-scaledobject
+  namespace: wikitrends
+spec:
+  scaleTargetRef:
+    name: wikitrends-classifier
+  pollingInterval: 10
+  cooldownPeriod: 60
+  minReplicaCount: 1
+  maxReplicaCount: 6
+  triggers:
+    - type: kafka
+      metadata:
+        bootstrapServers: wikitrends-kafka:9092
+        consumerGroup: wiki-classifier-group
+        topic: wiki.enriched
+        lagThreshold: "200"

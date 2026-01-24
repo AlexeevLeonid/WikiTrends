@@ -1,0 +1,394 @@
+version: "3.9"
+
+services:
+  seq:
+    image: datalust/seq:latest
+    environment:
+      ACCEPT_EULA: "Y"
+      SEQ_FIRSTRUN_NOAUTHENTICATION: "true"
+    ports:
+      - "5341:80"
+      - "5342:5341"
+    volumes:
+      - seq-data:/data
+    restart: unless-stopped
+
+  postgres-init:
+    image: postgres:16
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGUSER: postgres
+      PGPASSWORD: postgres
+    entrypoint: ["bash", "-lc"]
+    command:
+      - |
+        set -e
+        psql -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='wikitrends_enricher'" | grep -q 1 || psql -d postgres -v ON_ERROR_STOP=1 -c "CREATE DATABASE wikitrends_enricher"
+        psql -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='wikitrends_classifier'" | grep -q 1 || psql -d postgres -v ON_ERROR_STOP=1 -c "CREATE DATABASE wikitrends_classifier"
+    restart: "no"
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: wikitrends
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d wikitrends"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.12
+    environment:
+      CLICKHOUSE_DB: wikitrends
+      CLICKHOUSE_USER: wikitrends
+      CLICKHOUSE_PASSWORD: wikitrends
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+    restart: unless-stopped
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: "2181"
+      ZOOKEEPER_TICK_TIME: "2000"
+    ports:
+      - "2181:2181"
+    restart: unless-stopped
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: "1"
+      KAFKA_ZOOKEEPER_CONNECT: "zookeeper:2181"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT"
+      KAFKA_LISTENERS: "PLAINTEXT://0.0.0.0:9092,PLAINTEXT_HOST://0.0.0.0:29092"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092"
+      KAFKA_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: "0"
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    restart: unless-stopped
+
+  kafka-init:
+    image: confluentinc/cp-kafka:7.6.0
+    depends_on:
+      - kafka
+    entrypoint: ["bash", "-lc"]
+    command:
+      - |
+        set -e
+        until kafka-topics --bootstrap-server kafka:9092 --list >/dev/null 2>&1; do echo "Waiting for Kafka..."; sleep 2; done
+        PARTITIONS=$${KAFKA_TOPIC_PARTITIONS:-6}
+        kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic wiki.raw-edits --replication-factor 1 --partitions $${PARTITIONS}
+        kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic wiki.enriched --replication-factor 1 --partitions $${PARTITIONS}
+        kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic wiki.enriched.v2 --replication-factor 1 --partitions $${PARTITIONS}
+        kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic wiki.classified --replication-factor 1 --partitions $${PARTITIONS}
+        kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic wiki.trend-updates --replication-factor 1 --partitions $${PARTITIONS}
+        kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic wiki.commands.recalculate-baseline --replication-factor 1 --partitions $${PARTITIONS}
+        kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic wiki.commands.invalidate-cache --replication-factor 1 --partitions $${PARTITIONS}
+    restart: "no"
+
+  collector:
+    build:
+      context: .
+      dockerfile: WikiTrends.Collector/Dockerfile
+    depends_on:
+      - kafka
+      - kafka-init
+      - postgres-init
+      - seq
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+    environment:
+      ASPNETCORE_ENVIRONMENT: "Production"
+      Kafka__BootstrapServers: "kafka:9092"
+      Kafka__GroupId: "wiki-collector-group"
+      Kafka__AutoOffsetReset: "earliest"
+      Kafka__EnableAutoCommit: "false"
+      Kafka__AutoCommitIntervalMs: "5000"
+      Kafka__SessionTimeoutMs: "30000"
+      Kafka__MaxPollIntervalMs: "300000"
+      Topics__RawEdits: "wiki.raw-edits"
+      Topics__EnrichedEdits: "wiki.enriched"
+      Topics__ClassifiedEdits: "wiki.classified"
+      Topics__TrendUpdates: "wiki.trend-updates"
+      Topics__RecalculateBaselineCommands: "wiki.commands.recalculate-baseline"
+      Topics__InvalidateCacheCommands: "wiki.commands.invalidate-cache"
+      ServiceUrls__AggregatorBaseUrl: "http://aggregator"
+      ServiceUrls__AnalyticsBaseUrl: "http://analytics:8080"
+      ServiceUrls__ClassifierBaseUrl: "http://classifier:8080"
+      ServiceUrls__EnricherBaseUrl: "http://enricher:8080"
+      ConnectionStrings__PostgreSQL: "Host=postgres;Database=wikitrends;Username=postgres;Password=postgres"
+      ConnectionStrings__Redis: "redis:6379"
+      Serilog__MinimumLevel__Override__WikiTrends: "Debug"
+      Serilog__Using__0: "Serilog.Sinks.Console"
+      Serilog__Using__1: "Serilog.Sinks.Seq"
+      Serilog__WriteTo__0__Name: "Console"
+      Serilog__WriteTo__1__Name: "Seq"
+      Serilog__WriteTo__1__Args__serverUrl: "http://seq:5341"
+    restart: unless-stopped
+
+  analytics:
+    build:
+      context: .
+      dockerfile: WikiTrends.Analytics/Dockerfile
+    depends_on:
+      - kafka
+      - kafka-init
+      - redis
+      - seq
+      - clickhouse
+    environment:
+      ASPNETCORE_ENVIRONMENT: "Production"
+      ASPNETCORE_URLS: "http://+:8080"
+      Kafka__BootstrapServers: "kafka:9092"
+      Kafka__GroupId: "wiki-analytics-group"
+      Kafka__AutoOffsetReset: "earliest"
+      Kafka__EnableAutoCommit: "false"
+      Kafka__AutoCommitIntervalMs: "5000"
+      Kafka__SessionTimeoutMs: "30000"
+      Kafka__MaxPollIntervalMs: "300000"
+      Topics__RawEdits: "wiki.raw-edits"
+      Topics__EnrichedEdits: "wiki.enriched"
+      Topics__ClassifiedEdits: "wiki.classified"
+      Topics__TrendUpdates: "wiki.trend-updates"
+      Topics__RecalculateBaselineCommands: "wiki.commands.recalculate-baseline"
+      Topics__InvalidateCacheCommands: "wiki.commands.invalidate-cache"
+      ServiceUrls__AggregatorBaseUrl: "http://aggregator"
+      ServiceUrls__AnalyticsBaseUrl: "http://analytics:8080"
+      ServiceUrls__ClassifierBaseUrl: "http://classifier:8080"
+      ServiceUrls__EnricherBaseUrl: "http://enricher:8080"
+      ConnectionStrings__PostgreSQL: "Host=postgres;Database=wikitrends;Username=postgres;Password=postgres"
+      ConnectionStrings__Redis: "redis:6379"
+      ClickHouse__BaseUrl: "http://clickhouse:8123"
+      ClickHouse__Database: "wikitrends"
+      ClickHouse__ConnectionString: "Host=clickhouse;Protocol=http;Port=8123;Database=wikitrends;Username=wikitrends;Password=wikitrends"
+      Serilog__WriteTo__1__Args__serverUrl: "http://seq:5341"
+    restart: unless-stopped
+    profiles:
+      - extended
+
+  aggregator:
+    build:
+      context: .
+      dockerfile: WikiTrends.Aggregator/Dockerfile
+    depends_on:
+      - kafka
+      - kafka-init
+      - redis
+      - seq
+    environment:
+      ASPNETCORE_ENVIRONMENT: "Production"
+      ASPNETCORE_URLS: "http://+:80"
+      Kafka__BootstrapServers: "kafka:9092"
+      Kafka__GroupId: "wiki-aggregator-group"
+      Kafka__AutoOffsetReset: "earliest"
+      Kafka__EnableAutoCommit: "false"
+      Kafka__AutoCommitIntervalMs: "5000"
+      Kafka__SessionTimeoutMs: "30000"
+      Kafka__MaxPollIntervalMs: "300000"
+      Topics__RawEdits: "wiki.raw-edits"
+      Topics__EnrichedEdits: "wiki.enriched"
+      Topics__ClassifiedEdits: "wiki.classified"
+      Topics__TrendUpdates: "wiki.trend-updates"
+      Topics__RecalculateBaselineCommands: "wiki.commands.recalculate-baseline"
+      Topics__InvalidateCacheCommands: "wiki.commands.invalidate-cache"
+      ServiceUrls__AggregatorBaseUrl: "http://aggregator"
+      ServiceUrls__AnalyticsBaseUrl: "http://analytics:8080"
+      ServiceUrls__ClassifierBaseUrl: "http://classifier:8080"
+      ServiceUrls__EnricherBaseUrl: "http://enricher:8080"
+      ConnectionStrings__PostgreSQL: "Host=postgres;Database=wikitrends;Username=postgres;Password=postgres"
+      ConnectionStrings__Redis: "redis:6379"
+      Serilog__WriteTo__1__Args__serverUrl: "http://seq:5341"
+    ports:
+      - "5084:80"
+    restart: unless-stopped
+    profiles:
+      - extended
+
+  gateway:
+    build:
+      context: .
+      dockerfile: WikiTrends.Gateway/Dockerfile
+    depends_on:
+      - seq
+      - aggregator
+    environment:
+      ASPNETCORE_ENVIRONMENT: "Production"
+      ServiceUrls__AggregatorBaseUrl: "http://aggregator"
+      ServiceUrls__AnalyticsBaseUrl: "http://analytics:8080"
+      ServiceUrls__ClassifierBaseUrl: "http://classifier:8080"
+      ServiceUrls__EnricherBaseUrl: "http://enricher:8080"
+      Serilog__WriteTo__1__Args__serverUrl: "http://seq:5341"
+    ports:
+      - "5080:8080"
+    restart: unless-stopped
+    profiles:
+      - extended
+
+  frontend:
+    build:
+      context: .
+      dockerfile: WikiTrends.Frontend/Dockerfile
+    depends_on:
+      - gateway
+    environment:
+      ASPNETCORE_ENVIRONMENT: "Production"
+      ASPNETCORE_HTTP_PORTS: "8080"
+      Gateway__BaseUrl: "http://gateway:8080"
+    ports:
+      - "5085:8080"
+    restart: unless-stopped
+    profiles:
+      - extended
+
+  scheduler:
+    build:
+      context: .
+      dockerfile: WikiTrends.Scheduler/Dockerfile
+    depends_on:
+      - kafka
+      - kafka-init
+      - seq
+    environment:
+      ASPNETCORE_ENVIRONMENT: "Production"
+      Kafka__BootstrapServers: "kafka:9092"
+      Kafka__GroupId: "wiki-scheduler-group"
+      Kafka__AutoOffsetReset: "earliest"
+      Kafka__EnableAutoCommit: "false"
+      Kafka__AutoCommitIntervalMs: "5000"
+      Kafka__SessionTimeoutMs: "30000"
+      Kafka__MaxPollIntervalMs: "300000"
+      Topics__RawEdits: "wiki.raw-edits"
+      Topics__EnrichedEdits: "wiki.enriched"
+      Topics__ClassifiedEdits: "wiki.classified"
+      Topics__TrendUpdates: "wiki.trend-updates"
+      Topics__RecalculateBaselineCommands: "wiki.commands.recalculate-baseline"
+      Topics__InvalidateCacheCommands: "wiki.commands.invalidate-cache"
+      ServiceUrls__AggregatorBaseUrl: "http://aggregator"
+      ServiceUrls__AnalyticsBaseUrl: "http://analytics:8080"
+      ServiceUrls__ClassifierBaseUrl: "http://classifier:8080"
+      ServiceUrls__EnricherBaseUrl: "http://enricher:8080"
+      Serilog__WriteTo__1__Args__serverUrl: "http://seq:5341"
+    ports:
+      - "5081:8080"
+    restart: unless-stopped
+    profiles:
+      - extended
+
+  enricher:
+    build:
+      context: .
+      dockerfile: WikiTrends.Enricher/Dockerfile
+    depends_on:
+      - kafka
+      - kafka-init
+      - postgres
+      - postgres-init
+      - redis
+      - seq
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+    environment:
+      ASPNETCORE_ENVIRONMENT: "Production"
+      Kafka__BootstrapServers: "kafka:9092"
+      Kafka__GroupId: "wiki-enricher-group"
+      Kafka__AutoOffsetReset: "earliest"
+      Kafka__EnableAutoCommit: "false"
+      Kafka__AutoCommitIntervalMs: "5000"
+      Kafka__SessionTimeoutMs: "30000"
+      Kafka__MaxPollIntervalMs: "300000"
+      Topics__RawEdits: "wiki.raw-edits"
+      Topics__EnrichedEdits: "wiki.enriched.v2"
+      Topics__ClassifiedEdits: "wiki.classified"
+      Topics__TrendUpdates: "wiki.trend-updates"
+      Topics__RecalculateBaselineCommands: "wiki.commands.recalculate-baseline"
+      Topics__InvalidateCacheCommands: "wiki.commands.invalidate-cache"
+      ServiceUrls__AggregatorBaseUrl: "http://aggregator"
+      ServiceUrls__AnalyticsBaseUrl: "http://analytics:8080"
+      ServiceUrls__ClassifierBaseUrl: "http://classifier:8080"
+      ServiceUrls__EnricherBaseUrl: "http://enricher:8080"
+      ConnectionStrings__PostgreSQL: "Host=postgres;Database=wikitrends_enricher;Username=postgres;Password=postgres"
+      ConnectionStrings__Redis: "redis:6379"
+      Database__MigrateOnStartup: "true"
+      Enricher__ArticleCacheHours: "4"
+      Enricher__WorkerCount: "3"
+      Serilog__WriteTo__1__Args__serverUrl: "http://seq:5341"
+    restart: unless-stopped
+
+  classifier:
+    build:
+      context: .
+      dockerfile: WikiTrends.Classifier/Dockerfile
+    depends_on:
+      - kafka
+      - kafka-init
+      - postgres
+      - postgres-init
+      - redis
+      - seq
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+    environment:
+      ASPNETCORE_ENVIRONMENT: "Production"
+      Kafka__BootstrapServers: "kafka:9092"
+      Kafka__GroupId: "wiki-classifier-v2-group"
+      Kafka__AutoOffsetReset: "earliest"
+      Kafka__EnableAutoCommit: "false"
+      Kafka__AutoCommitIntervalMs: "5000"
+      Kafka__SessionTimeoutMs: "30000"
+      Kafka__MaxPollIntervalMs: "300000"
+      Topics__RawEdits: "wiki.raw-edits"
+      Topics__EnrichedEdits: "wiki.enriched.v2"
+      Topics__ClassifiedEdits: "wiki.classified"
+      Topics__TrendUpdates: "wiki.trend-updates"
+      Topics__RecalculateBaselineCommands: "wiki.commands.recalculate-baseline"
+      Topics__InvalidateCacheCommands: "wiki.commands.invalidate-cache"
+      ServiceUrls__AggregatorBaseUrl: "http://aggregator"
+      ServiceUrls__AnalyticsBaseUrl: "http://analytics:8080"
+      ServiceUrls__ClassifierBaseUrl: "http://classifier:8080"
+      ServiceUrls__EnricherBaseUrl: "http://enricher:8080"
+      ConnectionStrings__PostgreSQL: "Host=postgres;Database=wikitrends_classifier;Username=postgres;Password=postgres"
+      ConnectionStrings__Redis: "redis:6379"
+      Database__MigrateOnStartup: "true"
+      Classifier__WikidataCacheHours: "24"
+      Classifier__SeedTopicsOnStartup: "true"
+      Classifier__WorkerCount: "6"
+      Classifier__SparqlTimeoutSeconds: "8"
+      Classifier__SparqlCircuitOpenSeconds: "300"
+      Classifier__SparqlCacheHours: "48"
+      Serilog__WriteTo__1__Args__serverUrl: "http://seq:5341"
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  seq-data:
+  clickhouse-data:

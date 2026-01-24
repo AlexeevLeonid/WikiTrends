@@ -1,0 +1,60 @@
+# Build results
+**/bin/
+**/obj/
+
+# User-specific files
+*.user
+*.userosscache
+*.suo
+*.userprefs
+
+# Visual Studio / VS Code
+.vs/
+.vscode/
+
+# JetBrains Rider
+.idea/
+*.sln.iml
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Logs
+**/*.log
+**/logs/
+
+# Test results
+TestResults/
+**/*.trx
+
+# Coverage
+**/coverage/
+**/coverage.*
+
+# NuGet
+**/packages/
+*.nupkg
+
+# Dotnet tools
+.dotnet/
+
+# Local config / secrets
+*.pfx
+*.snk
+appsettings.*.local.json
+appsettings.*.Secrets.json
+.env
+.env.*
+
+# Docker
+**/.docker/
+
+# Optional: ignore local database dumps
+**/*.bak
+**/*.dump
+**/*.sql
+
+# Frontend artifacts (if generated)
+**/wwwroot/dist/
