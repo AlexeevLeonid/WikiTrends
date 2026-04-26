@@ -35,5 +35,5 @@ spec:
       metadata:
         bootstrapServers: wikitrends-kafka:9092
         consumerGroup: wiki-classifier-group
-        topic: wiki.enriched
+        topic: wiki.enriched.v2
         lagThreshold: "200"

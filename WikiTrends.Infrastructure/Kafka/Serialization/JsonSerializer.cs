@@ -36,7 +36,7 @@ public sealed class KafkaJsonSerializer<T> : ISerializer<T>
     /// </summary>
     public byte[] Serialize(T data, SerializationContext context)
     {
-        if (data == null) return null;
+        if (data == null) return Array.Empty<byte>();
         return JsonSerializer.SerializeToUtf8Bytes(data, _options);
     }
 }

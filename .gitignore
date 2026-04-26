@@ -1,6 +1,10 @@
 # Build results
+bin/
+obj/
 **/bin/
 **/obj/
+**/Debug/
+**/Release/
 
 # User-specific files
 *.user

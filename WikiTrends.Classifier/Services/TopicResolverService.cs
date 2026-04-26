@@ -72,6 +72,23 @@ public sealed class TopicResolverService : ITopicResolverService
 
         try
         {
+            var existingArticleTopics = await _articleTopicRepository.GetByArticleIdAsync(articleId, ct);
+            var existingTopic = existingArticleTopics
+                .Where(x => x.Topic != null)
+                .OrderByDescending(x => x.Confidence)
+                .FirstOrDefault();
+
+            if (existingTopic?.Topic != null)
+            {
+                _logger.LogInformation(
+                    "Resolved topic from article-topic cache for Article {ArticleId}. Topic={Topic} Confidence={Confidence}",
+                    articleId,
+                    existingTopic.Topic.Name,
+                    existingTopic.Confidence);
+
+                return Result<ArticleTopicEntity>.Success(existingTopic);
+            }
+
             var mapping = await _wikidataMappingRepository.GetAsync(wikiCode, normalizedTitle, ct);
             var qid = mapping?.WikidataId;
 

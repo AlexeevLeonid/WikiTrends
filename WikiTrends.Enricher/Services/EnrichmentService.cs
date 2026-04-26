@@ -133,6 +133,11 @@ public sealed class EnrichmentService : IEnrichmentService
                 editEvent.Wiki,
                 ct);
 
+            if (article == null)
+            {
+                return Result<EnrichedEditEvent>.Failure("Article was not found after upsert");
+            }
+
             _logger.LogInformation(
                 "Enriched article {Title} from Wikipedia API. Categories: {Count}",
                 editEvent.Title,
@@ -143,7 +148,12 @@ public sealed class EnrichmentService : IEnrichmentService
             _logger.LogDebug(
                 "Using cached data for {Title}, last enriched at {LastEnrichedAt}",
                 editEvent.Title,
-                article.LastEnrichedAt);
+                article!.LastEnrichedAt);
+        }
+
+        if (article == null)
+        {
+            return Result<EnrichedEditEvent>.Failure("Article was not available after enrichment");
         }
 
         var enrichedEvent = new EnrichedEditEvent
@@ -151,7 +161,7 @@ public sealed class EnrichmentService : IEnrichmentService
             EventId = editEvent.EventId,
             WikiEditId = editEvent.WikiEditId,
 
-            ArticleId = article!.Id,
+            ArticleId = article.Id,
             PageId = article.WikiPageId,
             Title = article.Title,
             Wiki = article.Wiki,

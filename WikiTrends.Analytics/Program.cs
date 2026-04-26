@@ -107,12 +107,82 @@ try
         });
     });
 
-    app.MapGet("/api/trends/clusters", async (TrendPeriod period, CancellationToken ct) =>
+    app.MapGet("/api/trends/clusters", async (TrendPeriod period, IClickHouseClient clickHouseClient, CancellationToken ct) =>
     {
-        await Task.CompletedTask;
+        var raw = await clickHouseClient.QueryTrendsAsync(period, ct);
+        if (raw.Count == 0)
+        {
+            return Results.Ok(new ClusterResponse
+            {
+                Clusters = Array.Empty<ClusterDto>(),
+                GeneratedAt = DateTimeOffset.UtcNow
+            });
+        }
+
+        var topTrends = raw
+            .OrderByDescending(t => t.EditCount)
+            .Take(50)
+            .ToList();
+
+        var topicInfo = await clickHouseClient.GetTopicInfoAsync(topTrends.Select(t => t.TopicId), ct);
+        var clusters = new List<ClusterDto>();
+
+        foreach (var group in topTrends.GroupBy(t =>
+        {
+            topicInfo.TryGetValue(t.TopicId, out var info);
+            var labelSource = string.IsNullOrWhiteSpace(info.Path) ? info.Name : info.Path;
+            if (string.IsNullOrWhiteSpace(labelSource))
+            {
+                return $"topic-{t.TopicId}";
+            }
+
+            return labelSource
+                .Split('>', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+                .FirstOrDefault() ?? labelSource;
+        }))
+        {
+            var topicIds = group.Select(t => t.TopicId).Distinct().ToArray();
+            var articles = new List<ArticleDto>();
+
+            foreach (var trend in group.OrderByDescending(t => t.EditCount).Take(5))
+            {
+                var topArticles = await clickHouseClient.GetTopArticlesForTopicAsync(trend.TopicId, period, limit: 3, ct);
+                articles.AddRange(topArticles.Select(a => new ArticleDto
+                {
+                    Id = a.ArticleId,
+                    WikiPageId = a.ArticleId,
+                    Title = a.Title,
+                    Wiki = "enwiki",
+                    Extract = null,
+                    WikiUrl = $"https://en.wikipedia.org/wiki/{Uri.EscapeDataString(a.Title)}",
+                    EditCount = a.EditCount,
+                    UniqueEditors = a.UniqueEditors,
+                    LastEditAt = DateTimeOffset.UtcNow
+                }));
+            }
+
+            clusters.Add(new ClusterDto
+            {
+                ClusterId = group.Key.ToLowerInvariant().Replace(' ', '-'),
+                Label = group.Key,
+                TopicIds = topicIds,
+                Articles = articles
+                    .GroupBy(a => a.Id)
+                    .Select(g => g.OrderByDescending(a => a.EditCount).First())
+                    .OrderByDescending(a => a.EditCount)
+                    .Take(10)
+                    .ToList(),
+                Centroid = Array.Empty<float>(),
+                TotalEdits = group.Sum(t => t.EditCount)
+            });
+        }
+
         return Results.Ok(new ClusterResponse
         {
-            Clusters = Array.Empty<ClusterDto>(),
+            Clusters = clusters
+                .OrderByDescending(c => c.TotalEdits)
+                .Take(20)
+                .ToList(),
             GeneratedAt = DateTimeOffset.UtcNow
         });
     });

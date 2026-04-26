@@ -73,7 +73,7 @@ public sealed class EditMapper : IEditMapper
                 {
                     _notAllowedNamespaceLogged++;
                     _logger.LogDebug("Namespace is null or not aloowed id: {0}, namespace {1}",
-                        change.Id, change.Namespace == null ? "null" : change.Namespace);
+                        change.Id, change.Namespace);
                 }
                 return null;
             }
@@ -91,8 +91,8 @@ public sealed class EditMapper : IEditMapper
                 IsBot = change.Bot,
                 IsMinor = change.Minor,
                 IsNew = change.Type == "new",
-                OldLength = change.Length?.Old.Value ?? 0,
-                NewLength = change.Length?.New.Value ?? 0,
+                OldLength = change.Length?.Old ?? 0,
+                NewLength = change.Length?.New ?? 0,
 
                 CollectedAt = DateTimeOffset.UtcNow
             };

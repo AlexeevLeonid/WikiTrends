@@ -18,7 +18,7 @@ data:
   Kafka__SessionTimeoutMs: "30000"
   Kafka__MaxPollIntervalMs: "300000"
   Topics__RawEdits: "wiki.raw-edits"
-  Topics__EnrichedEdits: "wiki.enriched"
+  Topics__EnrichedEdits: "wiki.enriched.v2"
   Topics__ClassifiedEdits: "wiki.classified"
   Topics__TrendUpdates: "wiki.trend-updates"
   Topics__RecalculateBaselineCommands: "wiki.commands.recalculate-baseline"
@@ -164,6 +164,8 @@ spec:
               value: "wiki-enricher-group"
             - name: Enricher__ArticleCacheHours
               value: "4"
+            - name: Enricher__WorkerCount
+              value: "3"
           volumeMounts:
             - name: logs
               mountPath: /app/logs
@@ -213,6 +215,14 @@ spec:
               value: "24"
             - name: Classifier__SeedTopicsOnStartup
               value: "true"
+            - name: Classifier__WorkerCount
+              value: "6"
+            - name: Classifier__SparqlTimeoutSeconds
+              value: "8"
+            - name: Classifier__SparqlCircuitOpenSeconds
+              value: "300"
+            - name: Classifier__SparqlCacheHours
+              value: "48"
           volumeMounts:
             - name: logs
               mountPath: /app/logs

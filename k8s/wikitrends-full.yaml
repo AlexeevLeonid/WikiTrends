@@ -18,7 +18,7 @@ data:
   Kafka__SessionTimeoutMs: "30000"
   Kafka__MaxPollIntervalMs: "300000"
   Topics__RawEdits: "wiki.raw-edits"
-  Topics__EnrichedEdits: "wiki.enriched"
+  Topics__EnrichedEdits: "wiki.enriched.v2"
   Topics__ClassifiedEdits: "wiki.classified"
   Topics__TrendUpdates: "wiki.trend-updates"
   Topics__RecalculateBaselineCommands: "wiki.commands.recalculate-baseline"
@@ -282,7 +282,7 @@ spec:
               set -e
               until kafka-topics --bootstrap-server wikitrends-kafka:9092 --list >/dev/null 2>&1; do echo "Waiting for Kafka..."; sleep 2; done
               kafka-topics --bootstrap-server wikitrends-kafka:9092 --create --if-not-exists --topic wiki.raw-edits --replication-factor 1 --partitions ${PARTITIONS}
-              kafka-topics --bootstrap-server wikitrends-kafka:9092 --create --if-not-exists --topic wiki.enriched --replication-factor 1 --partitions ${PARTITIONS}
+              kafka-topics --bootstrap-server wikitrends-kafka:9092 --create --if-not-exists --topic wiki.enriched.v2 --replication-factor 1 --partitions ${PARTITIONS}
               kafka-topics --bootstrap-server wikitrends-kafka:9092 --create --if-not-exists --topic wiki.classified --replication-factor 1 --partitions ${PARTITIONS}
               kafka-topics --bootstrap-server wikitrends-kafka:9092 --create --if-not-exists --topic wiki.trend-updates --replication-factor 1 --partitions ${PARTITIONS}
               kafka-topics --bootstrap-server wikitrends-kafka:9092 --create --if-not-exists --topic wiki.commands.recalculate-baseline --replication-factor 1 --partitions ${PARTITIONS}
@@ -462,6 +462,8 @@ spec:
               value: "true"
             - name: Enricher__ArticleCacheHours
               value: "4"
+            - name: Enricher__WorkerCount
+              value: "3"
 ---
 apiVersion: v1
 kind: Service
@@ -513,6 +515,14 @@ spec:
               value: "24"
             - name: Classifier__SeedTopicsOnStartup
               value: "true"
+            - name: Classifier__WorkerCount
+              value: "6"
+            - name: Classifier__SparqlTimeoutSeconds
+              value: "8"
+            - name: Classifier__SparqlCircuitOpenSeconds
+              value: "300"
+            - name: Classifier__SparqlCacheHours
+              value: "48"
 ---
 apiVersion: v1
 kind: Service
